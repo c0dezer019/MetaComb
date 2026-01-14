@@ -39,18 +39,18 @@ def test_torch_tensor_input(capsys=None):  # type: ignore
 
     meta_comb = MetaComb()
 
-    # Test 1: Extract seed from torch tensor
-    result = meta_comb.comb_metadata(key="seed", image=tensor_img)
+    # Test 1: Extract seed from torch tensor (include metadata_raw since tensor conversion loses PNG metadata)
+    result = meta_comb.comb_metadata(key="seed", image=tensor_img, metadata_raw=pil_img.info.get("prompt", ""))
     expected = "1025463288989790"
     assert result[0] == expected, (
         f"Expected '{expected}', got '{result[0]}'"
     )
 
     # Test 2: Extract multiple fields
-    result = meta_comb.comb_metadata(key="cfg", image=tensor_img)
+    result = meta_comb.comb_metadata(key="cfg", image=tensor_img, metadata_raw=pil_img.info.get("prompt", ""))
     assert result[0] == "6.1", f"Expected '6.1', got '{result[0]}'"
 
-    result = meta_comb.comb_metadata(key="sampler_name", image=tensor_img)
+    result = meta_comb.comb_metadata(key="sampler_name", image=tensor_img, metadata_raw=pil_img.info.get("prompt", ""))
     expected_sampler = "dpmpp_2m"
     assert result[0] == expected_sampler, (
         f"Expected '{expected_sampler}', got '{result[0]}'"

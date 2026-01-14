@@ -7,10 +7,9 @@ class MetaComb:
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
         return {
-            "required": {
-                "key": ("STRING", {"default": ""}),
-            },
+            "required": {},
             "optional": {
+                "key": ("STRING", {"default": ""}),
                 "image": ("IMAGE",),
                 "filepath": ("STRING", {"forceInput": True}),
                 "metadata_raw": (
@@ -62,9 +61,9 @@ class MetaComb:
         if not workflow_data and image is not None:
             workflow_data = self._extract_from_image(image)
             if not workflow_data:
-                return (
-                    "Error: Image provided but no metadata found in image",
-                )
+                # Don't fail immediately; allow metadata_raw or prompt to be used as fallback
+                print("MetaComb: Image provided but no metadata found in image; continuing to other sources")
+                workflow_data = None
 
         # Priority 3: Raw metadata string
         if not workflow_data and metadata_raw:
@@ -98,16 +97,48 @@ class MetaComb:
         if not search_scope:
             search_scope = workflow_data
 
+        # Require at least one of key, node_title, or node_type
+        if not (key and str(key).strip()) and not node_title and not node_type:
+            return (
+                "Error: Please provide at least one of key, node_title, or node_type",
+            )
+
         # Perform search based on parameters
         results = self._search_nodes(search_scope, key, node_title, node_type)
 
         # Format output
         if not results:
+            # Tailored messages when searching for nodes instead of a key
+            if not (key and str(key).strip()):
+                if node_title and node_type:
+                    return (f"No nodes found matching title '{node_title}' and type '{node_type}'",)
+                if node_title:
+                    return (f"No node found with title '{node_title}'",)
+                if node_type:
+                    return (f"No nodes found of type '{node_type}'",)
             return (f"Key '{key}' not found",)
-        elif len(results) == 1:
-            return (str(results[0]),)
-        else:
+
+        # If key was not provided, handle node object returns
+        if not (key and str(key).strip()):
+            # node_type only -> always return an array (even if single)
+            if node_type and not node_title:
+                return (json.dumps(results, indent=2),)
+
+            # node_title only -> if single, return object, else array
+            if node_title and not node_type:
+                if len(results) == 1:
+                    return (json.dumps(results[0], indent=2),)
+                return (json.dumps(results, indent=2),)
+
+            # both title and type -> return array
             return (json.dumps(results, indent=2),)
+
+        # If result(s) are values, return string(s)
+        if len(results) == 1:
+            return (str(results[0]),)
+
+        # Multiple results
+        return (json.dumps(results, indent=2),)
 
     def _parse_raw_metadata(self, metadata_raw: str) -> Dict[str, Any]:
         """Parse raw metadata string into dict."""
@@ -288,7 +319,16 @@ class MetaComb:
 
         results: List[Any] = []
 
-        # Handle both node_title and node_type specified
+        # If key is not provided, return node objects based on title/type
+        if not (key and str(key).strip()):
+            if node_title and node_type:
+                return self._nodes_by_title_and_type(data, node_title, node_type)
+            if node_title:
+                return self._nodes_by_title(data, node_title)
+            if node_type:
+                return self._nodes_by_type(data, node_type)
+
+        # Handle both node_title and node_type specified (search for key)
         if node_title and node_type:
             results = self._search_by_title_and_type(
                 data, key, node_title, node_type
@@ -397,6 +437,50 @@ class MetaComb:
                 results.append(value)
                 return results  # Return first match
 
+        return results
+
+    def _nodes_by_title_and_type(
+        self,
+        data: Dict[str, Any],
+        node_title: str,
+        node_type: str,
+    ) -> List[Dict[str, Any]]:
+        """Return node objects matching both title and type."""
+        results: List[Dict[str, Any]] = []
+        for _node_id, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+            class_type_val: Any = node_data.get("class_type")  # type: ignore
+            if class_type_val == node_type:
+                meta_val: Any = node_data.get("_meta", {})  # type: ignore
+                meta_dict = cast(Dict[str, Any], meta_val)
+                title_val: Any = meta_dict.get("title", "")  # type: ignore
+                if str(title_val) == node_title:
+                    results.append(node_data)
+        return results
+
+    def _nodes_by_title(self, data: Dict[str, Any], node_title: str) -> List[Dict[str, Any]]:
+        """Return node objects matching title."""
+        results: List[Dict[str, Any]] = []
+        for _node_id, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+            meta_val: Any = node_data.get("_meta", {})  # type: ignore
+            meta_dict = cast(Dict[str, Any], meta_val)
+            title_val: Any = meta_dict.get("title", "")  # type: ignore
+            if str(title_val) == node_title:
+                results.append(node_data)
+        return results
+
+    def _nodes_by_type(self, data: Dict[str, Any], node_type: str) -> List[Dict[str, Any]]:
+        """Return node objects matching type."""
+        results: List[Dict[str, Any]] = []
+        for _node_id, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+            class_type_val: Any = node_data.get("class_type")  # type: ignore
+            if class_type_val == node_type:
+                results.append(node_data)
         return results
 
     def _recursive_find_key(self, obj: Any, key: str) -> Any:

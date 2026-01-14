@@ -35,16 +35,15 @@ The node will appear in the "utils" category as "Meta Comb".
 
 ### Basic Usage
 
-The MetaComb node has one required parameter and several optional ones:
+The MetaComb node requires at least one of the following inputs: `key`, `node_title`, or `node_type`.
 
-#### Required Parameters
-- **key** (STRING): The metadata key you want to extract (e.g., "seed", "steps", "cfg", "sampler_name")
+- **key** (STRING, optional): The metadata key you want to extract (e.g., "seed", "steps", "cfg", "sampler_name"). Provide this to extract a specific parameter value.
+- **node_title** (STRING, optional): If provided and `key` is empty, the node returns the entire node object matching this title. If `key` is provided along with `node_title`, it searches only within nodes that match the title.
+- **node_type** (STRING, optional): If provided and `key` is empty, the node returns all node objects of this type. If `key` is provided along with `node_type`, it searches only within nodes of that type.
 
-#### Optional Parameters
+Other optional parameters:
 - **image** (IMAGE): A ComfyUI image tensor or PIL Image containing workflow metadata
 - **metadata_raw** (STRING): Raw JSON metadata string as an alternative to image input
-- **node_title** (STRING): Filter search to nodes with this specific title
-- **node_type** (STRING): Filter search to nodes of this specific type (e.g., "KSampler")
 - **search_workflow** (BOOLEAN): Search in workflow data instead of prompt data (default: False)
 
 ### Examples

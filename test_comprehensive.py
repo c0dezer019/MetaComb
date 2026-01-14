@@ -4,6 +4,7 @@
 import sys
 from pathlib import Path
 from PIL import Image
+import json
 
 sys.path.insert(0, str(Path(__file__).parent))
 from meta_comb_node import MetaComb
@@ -73,8 +74,27 @@ def test_comprehensive():
     assert result[0] == "1025463288989790", f"Expected '1025463288989790', got '{result[0]}'"
     print("✓ PASSED")
 
+    # Test 8b: Return full node object when only node_title is provided
+    print("\n[TEST 8b] Return full node object for title 'KSampler' (no key)")
+    result = meta_comb.comb_metadata(key="", image=img, node_title="KSampler")
+    print(f"Result: {result}")
+    # Ensure result is valid JSON and contains the node's class_type
+    parsed = json.loads(result[0])
+    assert isinstance(parsed, dict), "Expected a JSON object for node title search"
+    assert parsed.get("class_type") == "KSampler", f"Expected class_type 'KSampler', got '{parsed.get('class_type')}'"
+    print("✓ PASSED")
+
+    # Test 9: Search by node type (no key -> return all nodes of that type)
+    print("\n[TEST 9] Return all nodes of type 'KSampler' (no key)")
+    result = meta_comb.comb_metadata(key="", image=img, node_type="KSampler")
+    print(f"Result: {result}")
+    parsed_list = json.loads(result[0])
+    assert isinstance(parsed_list, list), "Expected a JSON array for node type search"
+    assert any((obj.get("class_type") == "KSampler") for obj in parsed_list), "Expected at least one KSampler node in results"
+    print("✓ PASSED")
+
     # Test 6: Extract checkpoint name
-    print("\n[TEST 9] Extract 'ckpt_name' from image")
+    print("\n[TEST 10] Extract 'ckpt_name' from image")
     result = meta_comb.comb_metadata(key="ckpt_name", image=img)
     print(f"Result: {result}")
     assert "photon_v1.safetensors" in result[0], f"Expected checkpoint name in result, got '{result[0]}'"
