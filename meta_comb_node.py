@@ -1,0 +1,368 @@
+import json
+from typing import Any, Dict, List, Optional, cast
+from PIL import Image
+
+
+class MetaComb:
+    @classmethod
+    def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
+        return {
+            "required": {
+                "key": ("STRING", {"default": ""}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+                "metadata_raw": (
+                    "STRING",
+                    {"default": "", "multiline": True}
+                ),
+                "node_title": ("STRING", {"default": ""}),
+                "node_type": ("STRING", {"default": ""}),
+                "search_workflow": ("BOOLEAN", {"default": False}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    FUNCTION = "comb_metadata"
+    CATEGORY = "utils"
+
+    def comb_metadata(
+        self,
+        key: str,
+        image: Optional[Any] = None,
+        metadata_raw: str = "",
+        node_title: str = "",
+        node_type: str = "",
+        search_workflow: bool = False,
+        prompt: Optional[Dict[str, Any]] = None,
+        extra_pnginfo: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str]:
+        """Extract metadata from ComfyUI PNG workflow data or raw metadata
+        string."""
+
+        workflow_data = None
+
+        # Try to get workflow data from multiple sources
+        # Priority 1: Current execution prompt (always available in ComfyUI)
+        if prompt is not None:
+            workflow_data = {"prompt": prompt}
+            if extra_pnginfo and "workflow" in extra_pnginfo:
+                workflow_data["workflow"] = extra_pnginfo["workflow"]
+
+        # Priority 2: Raw metadata string
+        if not workflow_data and metadata_raw:
+            workflow_data = self._parse_raw_metadata(metadata_raw)
+
+        # Priority 3: Extract from saved PNG image
+        if not workflow_data and image is not None:
+            workflow_data = self._extract_from_image(image)
+
+        if not workflow_data:
+            return ("No workflow data found",)
+
+        # Choose search scope
+        search_scope = workflow_data.get(
+            "workflow" if search_workflow else "prompt", {}
+        )
+
+        # If scope is empty, try the other one
+        if not search_scope:
+            search_scope = workflow_data.get(
+                "prompt" if search_workflow else "workflow", {}
+            )
+
+        # If still empty, search the entire data structure
+        if not search_scope:
+            search_scope = workflow_data
+
+        # Perform search based on parameters
+        results = self._search_nodes(search_scope, key, node_title, node_type)
+
+        # Format output
+        if not results:
+            return (f"Key '{key}' not found",)
+        elif len(results) == 1:
+            return (str(results[0]),)
+        else:
+            return (json.dumps(results, indent=2),)
+
+    def _parse_raw_metadata(self, metadata_raw: str) -> Dict[str, Any]:
+        """Parse raw metadata string into dict."""
+        if not metadata_raw:
+            return {}
+
+        metadata_raw = metadata_raw.strip()
+
+        if not metadata_raw:
+            return {}
+
+        # Try direct JSON parsing first
+        try:
+            parsed = json.loads(metadata_raw)
+            # If it's a dict, return it directly
+            if isinstance(parsed, dict):
+                return cast(Dict[str, Any], parsed)
+            # If it's a list or other type, wrap it in a dict
+            return {"data": parsed}
+        except json.JSONDecodeError:
+            # If direct parsing fails, try to extract JSON
+            pass
+
+        # Try to extract JSON from text (find first { and last })
+        try:
+            start = metadata_raw.find("{")
+            end = metadata_raw.rfind("}")
+            if start != -1 and end != -1:
+                json_str = metadata_raw[start:end + 1]
+                parsed = json.loads(json_str)
+                if isinstance(parsed, dict):
+                    return cast(Dict[str, Any], parsed)
+                return {"data": parsed}
+        except json.JSONDecodeError:
+            pass
+
+        # Try to handle double-encoded JSON (JSON string containing JSON)
+        try:
+            # If the string looks like it might be double-encoded
+            if metadata_raw.startswith('"') and metadata_raw.endswith('"'):
+                decoded = json.loads(metadata_raw)
+                if isinstance(decoded, str):
+                    return self._parse_raw_metadata(decoded)
+                elif isinstance(decoded, dict):
+                    return cast(Dict[str, Any], decoded)
+                return {"data": decoded}
+        except (json.JSONDecodeError, RecursionError):
+            pass
+
+        return {}
+
+    def _extract_from_image(self, image: Any) -> Dict[str, Any]:
+        """Extract ComfyUI workflow data from image tensor or PIL Image."""
+
+        # Convert tensor to PIL Image if needed
+        if hasattr(image, "shape"):
+            try:
+                import torch
+                import numpy as np
+
+                # Validate it's a torch tensor
+                if isinstance(image, torch.Tensor):
+                    tensor_data = image[0].cpu().numpy()  # type: ignore
+                    i = 255.0 * tensor_data
+                    img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+                else:
+                    return {}
+            except Exception:
+                return {}
+        else:
+            img = image
+
+        return self._extract_workflow_from_png(img)
+
+    def _extract_workflow_from_png(
+        self, img: Image.Image
+    ) -> Dict[str, Any]:
+        """Extract ComfyUI workflow data from PNG metadata."""
+        if not isinstance(img, Image.Image):  # type: ignore
+            return {}
+
+        metadata = img.info
+        workflow_data: Dict[str, Any] = {}
+
+        # Extract both workflow and prompt keys if they exist
+        for key in ["workflow", "prompt"]:
+            if key in metadata:
+                try:
+                    data = (
+                        json.loads(metadata[key])
+                        if isinstance(metadata[key], str)
+                        else metadata[key]
+                    )
+                    workflow_data[key] = data
+                except json.JSONDecodeError:
+                    continue
+
+        # If we found workflow or prompt data, return it
+        if workflow_data:
+            return workflow_data
+
+        # Try to reconstruct from separate keys as fallback
+        for meta_key, meta_value in metadata.items():
+            # Ensure meta_key is a string (PIL can have tuple keys)
+            if not isinstance(meta_key, str):
+                continue
+
+            is_json_str = (
+                isinstance(meta_value, str)
+                and meta_value.strip().startswith("{")
+            )
+            if is_json_str:
+                try:
+                    parsed = json.loads(meta_value)
+                    is_workflow_key = meta_key in ["workflow", "prompt"]
+                    has_class_type = "class_type" in str(parsed)
+                    if is_workflow_key or has_class_type:
+                        workflow_data[meta_key] = parsed
+                except json.JSONDecodeError:
+                    continue
+
+        return workflow_data if workflow_data else {}
+
+    def _search_nodes(
+        self,
+        data: Dict[str, Any],
+        key: str,
+        node_title: str = "",
+        node_type: str = "",
+    ) -> List[Any]:
+        """Search nodes based on filters and extract key values."""
+
+        if not isinstance(data, dict):  # type: ignore
+            return []
+
+        results: List[Any] = []
+
+        # Handle both node_title and node_type specified
+        if node_title and node_type:
+            results = self._search_by_title_and_type(
+                data, key, node_title, node_type
+            )
+
+        # Handle only node_title specified
+        elif node_title:
+            results = self._search_by_title(data, key, node_title)
+
+        # Handle only node_type specified
+        elif node_type:
+            results = self._search_by_type(data, key, node_type)
+
+        # No filters - search all nodes
+        else:
+            results = self._search_all_nodes(data, key)
+
+        return results
+
+    def _search_by_title_and_type(
+        self,
+        data: Dict[str, Any],
+        key: str,
+        node_title: str,
+        node_type: str,
+    ) -> List[Any]:
+        """Search for key in nodes matching both title and type."""
+        results: List[Any] = []
+
+        for _node_id, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+
+            # Check if node matches both type and title
+            class_type_val: Any = node_data.get("class_type")  # type: ignore
+            if class_type_val == node_type:
+                meta_val: Any = node_data.get("_meta", {})  # type: ignore
+                meta_dict = cast(Dict[str, Any], meta_val)
+                title_val: Any = meta_dict.get("title", "")  # type: ignore
+                meta_title = str(title_val)
+                if meta_title == node_title:
+                    value = self._recursive_find_key(node_data, key)
+                    if value is not None:
+                        results.append(value)
+
+        return results
+
+    def _search_by_title(
+        self, data: Dict[str, Any], key: str, node_title: str
+    ) -> List[Any]:
+        """Search for key in nodes matching title."""
+        matching_nodes: List[Any] = []
+
+        for _node_id, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+
+            meta_val: Any = node_data.get("_meta", {})  # type: ignore
+            meta_dict = cast(Dict[str, Any], meta_val)
+            title_val: Any = meta_dict.get("title", "")  # type: ignore
+            meta_title = str(title_val)
+            if meta_title == node_title:
+                value = self._recursive_find_key(node_data, key)
+                if value is not None:
+                    matching_nodes.append(value)
+
+        # Return all matches if multiple found, otherwise first match
+        if len(matching_nodes) > 1:
+            # Check if all values are the same
+            if len(set(str(v) for v in matching_nodes)) == 1:
+                return [matching_nodes[0]]
+            return matching_nodes
+
+        return matching_nodes
+
+    def _search_by_type(
+        self, data: Dict[str, Any], key: str, node_type: str
+    ) -> List[Any]:
+        """Search for key in all nodes of specified type."""
+        results: List[Any] = []
+
+        for _node_id, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+
+            class_type_val: Any = node_data.get("class_type")  # type: ignore
+            if class_type_val == node_type:
+                value = self._recursive_find_key(node_data, key)
+                if value is not None:
+                    results.append(value)
+
+        return results
+
+    def _search_all_nodes(
+        self, data: Dict[str, Any], key: str
+    ) -> List[Any]:
+        """Search for key in all nodes."""
+        results: List[Any] = []
+
+        for _node_id, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+
+            value = self._recursive_find_key(node_data, key)
+            if value is not None:
+                results.append(value)
+                return results  # Return first match
+
+        return results
+
+    def _recursive_find_key(self, obj: Any, key: str) -> Any:
+        """Recursively search for key in nested structure."""
+
+        if isinstance(obj, dict):
+            # Direct key match
+            if key in obj:
+                return cast(Any, obj[key])
+
+            # Recursive search in nested dicts
+            for value in obj.values():  # type: ignore
+                typed_value: Any = cast(Any, value)
+                result = self._recursive_find_key(typed_value, key)
+                if result is not None:
+                    return result
+
+        elif isinstance(obj, list):
+            # Search in list items
+            for item in obj:  # type: ignore
+                typed_item: Any = cast(Any, item)
+                result = self._recursive_find_key(typed_item, key)
+                if result is not None:
+                    return result
+
+        return None
+
+
+NODE_CLASS_MAPPINGS = {"MetaComb": MetaComb}
+
+NODE_DISPLAY_NAME_MAPPINGS = {"MetaComb": "Meta Comb"}
