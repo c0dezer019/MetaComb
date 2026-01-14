@@ -12,6 +12,7 @@ class MetaComb:
             },
             "optional": {
                 "image": ("IMAGE",),
+                "filepath": ("STRING", {"forceInput": True}),
                 "metadata_raw": (
                     "STRING",
                     {"default": "", "multiline": True}
@@ -34,6 +35,7 @@ class MetaComb:
         self,
         key: str,
         image: Optional[Any] = None,
+        filepath: str = "",
         metadata_raw: str = "",
         node_title: str = "",
         node_type: str = "",
@@ -47,19 +49,36 @@ class MetaComb:
         workflow_data = None
 
         # Try to get workflow data from multiple sources
-        # Priority 1: Current execution prompt (always available in ComfyUI)
-        if prompt is not None:
+        # Priority 1: Extract from PNG file path (if provided)
+        if filepath:
+            workflow_data = self._extract_from_file_path(filepath)
+            if not workflow_data:
+                return (
+                    "Error: Filepath provided but no metadata found in file",
+                )
+
+        # Priority 2: Extract from image tensor
+        # (note: usually stripped by Load Image node)
+        if not workflow_data and image is not None:
+            workflow_data = self._extract_from_image(image)
+            if not workflow_data:
+                return (
+                    "Error: Image provided but no metadata found in image",
+                )
+
+        # Priority 3: Raw metadata string
+        if not workflow_data and metadata_raw:
+            workflow_data = self._parse_raw_metadata(metadata_raw)
+            if not workflow_data:
+                return (
+                    "Error: Raw metadata provided but could not be parsed",
+                )
+
+        # Priority 4: Current execution prompt (fallback to current workflow)
+        if not workflow_data and prompt is not None:
             workflow_data = {"prompt": prompt}
             if extra_pnginfo and "workflow" in extra_pnginfo:
                 workflow_data["workflow"] = extra_pnginfo["workflow"]
-
-        # Priority 2: Raw metadata string
-        if not workflow_data and metadata_raw:
-            workflow_data = self._parse_raw_metadata(metadata_raw)
-
-        # Priority 3: Extract from saved PNG image
-        if not workflow_data and image is not None:
-            workflow_data = self._extract_from_image(image)
 
         if not workflow_data:
             return ("No workflow data found",)
@@ -140,6 +159,36 @@ class MetaComb:
 
         return {}
 
+    def _extract_from_file_path(self, file_path: str) -> Dict[str, Any]:
+        """Extract ComfyUI workflow data from a PNG file path."""
+        import os
+
+        if not file_path or not os.path.exists(file_path):
+            print(f"MetaComb: File path does not exist: {file_path}")
+            return {}
+
+        try:
+            with Image.open(file_path) as img:
+                result = self._extract_workflow_from_png(img)
+                if result:
+                    print(
+                        "MetaComb: Successfully extracted metadata from file:",
+                        file_path,
+                    )
+                else:
+                    print(
+                        "MetaComb: No metadata found in file:",
+                        file_path,
+                    )
+                    print(
+                        "MetaComb: Available PNG info keys:",
+                        list(img.info.keys()),
+                    )
+                return result
+        except Exception as e:
+            print("MetaComb: Error reading file", file_path, ":", e)
+            return {}
+
     def _extract_from_image(self, image: Any) -> Dict[str, Any]:
         """Extract ComfyUI workflow data from image tensor or PIL Image."""
 
@@ -155,13 +204,26 @@ class MetaComb:
                     i = 255.0 * tensor_data
                     img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
                 else:
+                    print(
+                        "MetaComb: Image has shape but is not torch.Tensor:",
+                        type(image),
+                    )
                     return {}
-            except Exception:
+            except Exception as e:
+                print(f"MetaComb: Error converting tensor to PIL: {e}")
                 return {}
         else:
             img = image
 
-        return self._extract_workflow_from_png(img)
+        result = self._extract_workflow_from_png(img)
+        if not result:
+            print(
+                f"MetaComb: No metadata extracted from image. "
+                f"Image type: {type(img)}"
+            )
+            if isinstance(img, Image.Image):
+                print(f"MetaComb: PIL Image metadata keys: {list(img.info.keys())}")
+        return result
 
     def _extract_workflow_from_png(
         self, img: Image.Image
