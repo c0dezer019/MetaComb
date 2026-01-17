@@ -14,7 +14,9 @@ from meta_comb_node import MetaComb
 def test_png_metadata_extraction():
     """Test extracting metadata from the PNG file."""
 
-    png_path = Path(__file__).parent / "2025-12-02-desk-scene_Photon768x512-1025463288989790_00001_.png"
+    png_path = Path(__file__).parent / (
+        "2025-12-02-desk-scene_Photon768x512-1025463288989790_00001_.png"
+    )
 
     print(f"Testing PNG file: {png_path}")
     print(f"File exists: {png_path.exists()}")

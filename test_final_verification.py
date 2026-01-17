@@ -11,7 +11,9 @@ from meta_comb_node import MetaComb
 
 def test_realistic_scenarios():
     """Test realistic usage scenarios for the MetaComb node."""
-    png_path = Path(__file__).parent / "2025-12-02-desk-scene_Photon768x512-1025463288989790_00001_.png"
+    png_path = Path(__file__).parent / (
+        "2025-12-02-desk-scene_Photon768x512-1025463288989790_00001_.png"
+    )
 
     print("=" * 80)
     print("FINAL VERIFICATION - REALISTIC USAGE SCENARIOS")
