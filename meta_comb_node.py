@@ -1,6 +1,9 @@
 import json
+import logging
 from typing import Any, Dict, List, Optional, cast
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 class MetaComb:
@@ -10,12 +13,7 @@ class MetaComb:
             "required": {},
             "optional": {
                 "key": ("STRING", {"default": ""}),
-                "image": ("IMAGE",),
                 "filepath": ("STRING", {"forceInput": True}),
-                "metadata_raw": (
-                    "STRING",
-                    {"default": "", "multiline": True}
-                ),
                 "node_title": ("STRING", {"default": ""}),
                 "node_type": ("STRING", {"default": ""}),
                 "search_workflow": ("BOOLEAN", {"default": False}),
@@ -60,10 +58,14 @@ class MetaComb:
         # (note: usually stripped by Load Image node)
         if not workflow_data and image is not None:
             workflow_data = self._extract_from_image(image)
-            if not workflow_data:
-                # Don't fail immediately; allow metadata_raw or prompt to be used as fallback
-                print("MetaComb: Image provided but no metadata found in image; continuing to other sources")
-                workflow_data = None
+        if not workflow_data:
+            # Don't fail immediately; allow metadata_raw or prompt to be used
+            # as fallback
+            logger.debug(
+                "MetaComb: Image provided but no metadata found in image; "
+                "continuing to other sources"
+            )
+            workflow_data = None
 
         # Priority 3: Raw metadata string
         if not workflow_data and metadata_raw:
@@ -111,7 +113,10 @@ class MetaComb:
             # Tailored messages when searching for nodes instead of a key
             if not (key and str(key).strip()):
                 if node_title and node_type:
-                    return (f"No nodes found matching title '{node_title}' and type '{node_type}'",)
+                    return (
+                        f"No nodes found matching title '{node_title}' "
+                        f"and type '{node_type}'",
+                    )
                 if node_title:
                     return (f"No node found with title '{node_title}'",)
                 if node_type:
@@ -195,29 +200,29 @@ class MetaComb:
         import os
 
         if not file_path or not os.path.exists(file_path):
-            print(f"MetaComb: File path does not exist: {file_path}")
+            logger.debug("MetaComb: File path does not exist: %s", file_path)
             return {}
 
         try:
             with Image.open(file_path) as img:
                 result = self._extract_workflow_from_png(img)
                 if result:
-                    print(
-                        "MetaComb: Successfully extracted metadata from file:",
+                    logger.debug(
+                        "MetaComb: Successfully extracted metadata from file: %s",
                         file_path,
                     )
                 else:
-                    print(
-                        "MetaComb: No metadata found in file:",
+                    logger.debug(
+                        "MetaComb: No metadata found in file: %s",
                         file_path,
                     )
-                    print(
-                        "MetaComb: Available PNG info keys:",
+                    logger.debug(
+                        "MetaComb: Available PNG info keys: %s",
                         list(img.info.keys()),
                     )
                 return result
-        except Exception as e:
-            print("MetaComb: Error reading file", file_path, ":", e)
+        except Exception:
+            logger.exception("MetaComb: Error reading file %s", file_path)
             return {}
 
     def _extract_from_image(self, image: Any) -> Dict[str, Any]:
@@ -235,25 +240,28 @@ class MetaComb:
                     i = 255.0 * tensor_data
                     img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
                 else:
-                    print(
-                        "MetaComb: Image has shape but is not torch.Tensor:",
+                    logger.debug(
+                        "MetaComb: Image has shape but is not torch.Tensor: %s",
                         type(image),
                     )
                     return {}
-            except Exception as e:
-                print(f"MetaComb: Error converting tensor to PIL: {e}")
+            except Exception:
+                logger.exception("MetaComb: Error converting tensor to PIL")
                 return {}
         else:
             img = image
 
         result = self._extract_workflow_from_png(img)
         if not result:
-            print(
-                f"MetaComb: No metadata extracted from image. "
-                f"Image type: {type(img)}"
+            logger.debug(
+                "MetaComb: No metadata extracted from image. Image type: %s",
+                type(img),
             )
             if isinstance(img, Image.Image):
-                print(f"MetaComb: PIL Image metadata keys: {list(img.info.keys())}")
+                logger.debug(
+                    "MetaComb: PIL Image metadata keys: %s",
+                    list(img.info.keys()),
+                )
         return result
 
     def _extract_workflow_from_png(
@@ -459,7 +467,11 @@ class MetaComb:
                     results.append(node_data)
         return results
 
-    def _nodes_by_title(self, data: Dict[str, Any], node_title: str) -> List[Dict[str, Any]]:
+    def _nodes_by_title(
+        self,
+        data: Dict[str, Any],
+        node_title: str,
+    ) -> List[Dict[str, Any]]:
         """Return node objects matching title."""
         results: List[Dict[str, Any]] = []
         for _node_id, node_data in data.items():
@@ -472,7 +484,11 @@ class MetaComb:
                 results.append(node_data)
         return results
 
-    def _nodes_by_type(self, data: Dict[str, Any], node_type: str) -> List[Dict[str, Any]]:
+    def _nodes_by_type(
+        self,
+        data: Dict[str, Any],
+        node_type: str,
+    ) -> List[Dict[str, Any]]:
         """Return node objects matching type."""
         results: List[Dict[str, Any]] = []
         for _node_id, node_data in data.items():
